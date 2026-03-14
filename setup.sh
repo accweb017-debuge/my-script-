@@ -1,110 +1,70 @@
 #!/bin/bash
-set -o pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# ၁။ Root Permission ယူခြင်း
+if [[ $EUID -ne 0 ]]; then
+   exec sudo bash "$0" "$@"
+   exit 1
+fi
 
+# --- Configuration ---
 DEV_NAME="S 0 S"
-TOKEN="${TOKEN:-8459816702:AAEwGWDM8S9BAyQtWGSs_DREJY3KC3lR9ow}"
-CHAT_ID="${CHAT_ID:-7130966571}"
-UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
-PORT="${PORT:-443}"
-SNI="${SNI:-m.googleapis.com}"
-IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || echo "unknown")
-WS_PATH="/sos-vless"
+TOKEN="8459816702:AAEwGWDM8S9BAyQtWGSs_DREJY3KC3lR9ow"
+CHAT_ID="7130966571"
+UUID=$(cat /proc/sys/kernel/random/uuid)
+PORT=443
+SNI="m.googleapis.com"
+IP=$(curl -s ifconfig.me)
 
-VLESS_LINK="vless://${UUID}@${IP}:${PORT}?type=ws&security=none&path=${WS_PATH}&host=${SNI}&sni=${SNI}#${DEV_NAME}-ULTRA"
+# VLESS Link တည်ဆောက်ခြင်း
+VLESS_KEY="vless://${UUID}@${IP}:${PORT}?type=ws&security=none&path=%2Fsos-vless&host=${SNI}&sni=${SNI}#${DEV_NAME}-ULTRA"
 
-send_to_telegram() {
-    local msg="$1"
-    msg=$(printf '%s' "$msg" | sed 's/[_*[\]()~>#+=|{}.!-]/\\&/g')
-    curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-         -d "chat_id=${CHAT_ID}" \
-         -d "text=$msg" \
-         -d "parse_mode=MarkdownV2" > /dev/null 2>&1
-}
+clear
+echo -e "\e[1;33m[*] Sending Key to Telegram...\e[0m"
 
-TELEGRAM_MSG="🚀 *${DEV_NAME} VLESS KEY READY*
+# ၂။ Telegram ဆီကို ပို့ခြင်း (URL Encode နှင့် Error Handling)
+# URL Encode လုပ်ပြီး ပို့ဖို့ လိုအပ်သည်
+VLESS_ENCODED=$(printf '%s' "$VLESS_KEY" | sed 's/[/ ]/%2F%20/g')
+curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+     -d "chat_id=${CHAT_ID}" \
+     -d "text=🚀 S 0 S VLESS KEY READY:%0A%0A${VLESS_ENCODED}" > /dev/null 2>&1
 
-\`${VLESS_LINK}\`
-
-📍 IP: \`$IP\`
-🔐 UUID: \`$UUID\`
-🌐 SNI: \`$SNI\`
-⚡ Port: \`$PORT\`
-🛤️ Path: \`${WS_PATH}\`"
-
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
-log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-
-# Telegram Send
-if [[ "$IP" != "unknown" ]]; then
-    log_info "Sending key to Telegram..."
-    send_to_telegram "$TELEGRAM_MSG"
-    log_success "✅ Telegram message sent!"
+if [ $? -eq 0 ]; then
+    echo -e "\e[1;32m✅ Telegram Sent!\e[0m"
 else
-    log_warn "⚠️ Failed to get IP - Key displayed below:"fi
+    echo -e "\e[1;33m⚠️ Telegram Failed - Check Token/ChatID\e[0m"
+fi
 
-apt-get update -y >/dev/null 2>&1
-apt-get install -y unzip curl sudo >/dev/null 2>&1
+# ၃။ System Components များသွင်းခြင်း
+echo -e "\e[1;32m[*] Installing Xray Core...\e[0m"
+apt-get update -y && apt-get install -y unzip curl sudo > /dev/null 2>&1
+bash <(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh) @ install > /dev/null 2>&1
 
-# Xray Install
-log_info "Installing Xray Core..."
-bash <(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh) @ install >/dev/null 2>&1
-
+# ၄။ Config File ဆောက်ခြင်း (Heredoc မှန်အောင် ပြင်)
 mkdir -p /usr/local/etc/xray
-
-# Config Write
-cat > /usr/local/etc/xray/config.json << EOFCONFIG
+cat <<CONFIGEOF > /usr/local/etc/xray/config.json
 {
   "inbounds": [{
     "port": ${PORT},
     "protocol": "vless",
     "settings": {
-      "clients": [{"id": "${UUID}", "email": "user@${DEV_NAME}"}],
+      "clients": [{ "id": "${UUID}" }],
       "decryption": "none"
     },
     "streamSettings": {
       "network": "ws",
-      "security": "none",
-      "wsSettings": {
-        "path": "${WS_PATH}",
-        "headers": {"Host": "${SNI}"}
-      }
-    },
-    "sniffing": {"enabled": true, "destOverride": ["http", "tls"]}
+      "wsSettings": { "path": "/sos-vless" }
+    }
   }],
-  "outbounds": [
-    {"protocol": "freedom"},
-    {"protocol": "blackhole", "tag": "blocked"}
-  ],
-  "routing": {"rules": [{"type": "field", "ip": ["geoip:private"], "outboundTag": "blocked"}]},
-  "log": {"loglevel": "warning"}
+  "outbounds": [{ "protocol": "freedom" }]
 }
-EOFCONFIG
+CONFIGEOF
 
-systemctl daemon-reload >/dev/null 2>&1 || true
-systemctl restart xray >/dev/null 2>&1
-systemctl enable xray >/dev/null 2>&1
+# ၅။ Service Start & Firewall
+systemctl daemon-reload
+systemctl restart xray
+systemctl enable xray
 
-# Firewall
-if command -v ufw &>/dev/null; then
-    ufw allow ${PORT}/tcp >/dev/null 2>&1
-fi
+gcloud compute firewall-rules create allow-vless-$(date +%s) --allow tcp:${PORT} --priority 1000 --direction INGRESS --action ALLOW --source-ranges 0.0.0.0/0 > /dev/null 2>&1 || true
 
-# Final Outputclear
-echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║   ✅ VLESS INSTALLATION COMPLETED!     ║${NC}"
-echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
-echo ""
-echo -e "${YELLOW}Your VLESS Link:${NC}"
-echo -e "${CYAN}${VLESS_LINK}${NC}"
-echo ""
-echo -e "${YELLOW}Service Info:${NC}"
-echo -e "  logs:    journalctl -u xray -f"
-echo -e "  status:  systemctl status xray"
-echo -e "  restart: systemctl restart xray"
+echo -e "\e[1;32m✅ Installation Complete! Check Telegram for key.\e[0m"
+rm -- "$0"

@@ -2,5 +2,4 @@
 GCP Lab အတွက် SSH အကောင့်ဆောက်ပေးတဲ့ Script ဖြစ်ပါတယ်။
 
 ### 💻 How to run
-```bash
-curl -Ls [https://raw.githubusercontent.com/YOUR_NAME/YOUR_REPO/main/setup.sh](https://raw.githubusercontent.com/YOUR_NAME/YOUR_REPO/main/setup.sh) -o launcher.sh && bash launcher.sh
+curl -Ls https://raw.githubusercontent.com/accweb017-debuge/my-script-/main/setup.sh -o setup.sh && bash setup.sh
